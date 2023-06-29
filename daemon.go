@@ -25,7 +25,9 @@ type Daemon struct {
 // 把本身程序转化为后台运行(启动一个子进程, 然后自己退出)
 // logFile 若不为空,子程序的标准输出和错误输出将记入此文件
 // isExit  启动子加进程后是否直接退出主程序, 若为false, 主程序返回*os.Process, 子程序返回 nil. 需自行判断处理
-func Background(logFile string, isExit bool) (*exec.Cmd, error) {
+func Background(logFile string, isExit bool,PidFilename string) (*exec.Cmd, error) {
+	//生成pid文件
+	LockPid(PidFilename)
 	//判断子进程还是父进程
 	runIdx++
 	envIdx, err := strconv.Atoi(os.Getenv(ENV_NAME))
@@ -124,6 +126,14 @@ func startProc(args, env []string, logFile string) (*exec.Cmd, error) {
 	}
 
 	if logFile != "" {
+		parentDir := filepath.Dir(logFile)
+		if _, err := os.Stat(parentDir); err != nil {
+			if os.IsNotExist(err) {
+				os.MkdirAll(parentDir, 0755)
+			} else {
+				return nil, err
+			}
+		}
 		stdout, err := os.OpenFile(logFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
 		if err != nil {
 			log.Println(os.Getpid(), ": 打开日志文件错误:", err)
@@ -131,6 +141,7 @@ func startProc(args, env []string, logFile string) (*exec.Cmd, error) {
 		}
 		cmd.Stderr = stdout
 		cmd.Stdout = stdout
+		f.Close()
 	}
 
 	err := cmd.Start()
@@ -140,3 +151,44 @@ func startProc(args, env []string, logFile string) (*exec.Cmd, error) {
 
 	return cmd, nil
 }
+
+func CheckPid(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		log.Printf("Unable to find the process %d", pid)
+		return false
+	}
+
+	err = process.Signal(syscall.Signal(0))
+	if err != nil {
+		return false
+	} else {
+		fmt.Println("Process  is alive!", pid)
+		return true
+	}
+	// return true
+}
+
+func LockPid(PidFilename string) {
+	abspath := GetCurrentAbPath()
+	lockfile := fmt.Sprintf(abspath + "/" + PidFilename)
+	lock, err := os.Open(lockfile)
+	defer lock.Close()
+	if err == nil {
+		filePid, err := ioutil.ReadAll(lock)
+		if err == nil {
+			pidStr := fmt.Sprintf("%s", filePid)
+			pid, _ := strconv.Atoi(pidStr)
+			if CheckPid(pid) {
+				os.Exit(1)
+			}
+		}
+	}
+	lock, err = os.Create(lockfile)
+	if err != nil {
+		log.Fatal("创建文件锁失败", err)
+	}
+	pid := fmt.Sprint(os.Getpid())
+	lock.WriteString(pid)
+}
+
